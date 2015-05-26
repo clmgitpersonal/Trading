@@ -1,0 +1,79 @@
+---
+title: 'Momentum with R: Part 1'
+author: "rbresearch"
+date: "August 23, 2012"
+output: html_document
+---
+
+Time really flies… it is hard to believe that it has been over a month since my last post. Work and life in general have consumed much of my time lately and left little time for research and blog posts. Anyway, on to the post!
+
+This post will be the first in a series of to cover a momentum strategy using R.
+
+One of my favorite strategies is a momentum or relative strength strategy. Here are just a few of the reasons why I like momentum:
+
+Simple to implement
+Long only or long/short portfolios
+Many ways to define the strength or momentum measure
+It just works
+Also, a momentum strategy lends itself well to potential for diversification. The universe of instruments can be infinite, but the instruments traded are finite. Think about it this way… Investor A looks at 10 instruments and invests $1000 in the top 5 instruments ranked by momentum. Investor B looks at 100 instruments and invests $1000 in the top 5 instruments ranked by momentum. Investor A is limiting his potential for diversification by only having a universe of 10 instruments. Investor B has a much larger universe of instruments and can in theory be more diversified. Theoretically speaking, you can trade an infinite number of instruments with a finite amount of trading capital using a momentum or relative strength strategy.
+
+Check out these links for further reading
+
+AQR Momentum Research
+CXO Advisory
+SSRN search “momentum”
+Systematic Relative Strength
+In this first post of the series on momentum, I will go over some of the basic setup and functions we will be using.
+
+The first step is to get data from yahoo.
+```{r}
+require(quantstrat)
+#Load ETFs from yahoo
+currency("USD")
+symbols = c("XLY", "XLP", "XLE", "XLF")
+stock(symbols, currency="USD",multiplier=1)
+getSymbols(symbols, src='yahoo', index.class=c("POSIXt","POSIXct"), from='2000-01-01')
+#Convert to monthly and drop all columns except Adjusted Close
+for(symbol in symbols) {
+  x <- get(symbol)
+  x <- to.monthly(x,indexAt='lastof',drop.time=TRUE)
+  indexFormat(x) <- '%Y-%m-%d'
+  colnames(x) <- gsub("x",symbol,colnames(x))
+  x <- x[,6] #drops all columns except Adjusted Close which is 6th column
+  assign(symbol,x)
+}
+```
+Note that the for loop converts the data to monthly and subsets the data so that the only column we keep is the adjusted close column. We now have four objects (XLY, XLP, XLE, XLF) that have the Adjusted Close price.
+```{r}
+head(XLE)
+```
+The next step is to merge these four objects into a single object holding the Adjusted Close price. We can do this in a simple one-liner in R!
+```{r}
+#merge the symbols into a single object with just the close prices
+symbols_close <- do.call(merge, lapply(symbols, get))
+head(symbols_close)
+```
+
+For the factor that will be ranked, I will use the 3 period rate of change (ROC).
+```{r}
+# xts object of the 3 period ROC of each column in the close object
+# The 3 period ROC will be used as the ranking factor
+roc <- ROC(symbols_close, n = 3, type = "discrete")
+head(roc)
+```
+
+Then we apply the rank function across each row of the roc object.
+```{r}
+#xts object with ranks.
+#Symbol with a rank of 1 has the highest ROC.
+r <- as.xts(t(apply(-roc, 1, rank)))
+head(r)
+```
+           XLY.Adjusted XLP.Adjusted XLE.Adjusted XLF.Adjusted
+2000-01-31            1            2            3            4
+2000-02-29            1            2            3            4
+2000-03-31            1            2            3            4
+2000-04-30            3            4            2            1
+2000-05-31            4            3            1            2
+2000-06-30            4            1            2            3
+That will wrap up this first post for a quick and easy way to rank assets based on 3 month simple returns. Future posts will explore other methods for ranking and using quantstrat to backtest momentum.

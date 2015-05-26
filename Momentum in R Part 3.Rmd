@@ -1,0 +1,261 @@
+---
+title: "Momentum in R: Part 3"
+author: "rbresearch"
+date: "November 18, 2012"
+output: html_document
+---
+
+In the previous post, I demonstrated simple backtests for trading a number of assets ranked based on their 3, 6, 9, or 12 (i.e lookback periods) month simple returns. While it was not an exhaustive backtest, the results showed that when trading the top 8 ranked assets, the ranking based 3, 6, 9, and 12 month returns resulted in similar performance.
+
+If the results were similar for the different lookback periods, which lookback period should I choose for my strategy? My answer is to include multiple lookback periods in the ranking method.
+
+This can be accomplished by taking the average of the 6, 9, and 12 month returns, or any other n-month returns. This gives us the benefit of diversifying across multiple lookback periods. If I believe that the lookback period of 9 month returns is better than that of the 6 and 12 month, I can use a weighted average to give the 9 month return a higher weight so that it has more influence on determining the rank. This can be implemented easily with what I am calling the WeightAve3ROC() function shown below.
+
+WeightAve3ROC <- function(x, n = c(1,3,6), weights = c(1/3, 1/3, 1/3)){
+  # Computes the weighted average rate of change based on a vector of periods
+	# and a vector of weights
+	#
+	# args:
+	#   x = xts object of simple returns
+	#   n = vector of periods to use n = (period1, period2, period3)
+	#   weights = a vector of weights for computing the weighted average
+	#
+	# Returns:
+	#   xts object of weighted average asset rate of change
+
+  if((sum(weights) != 1) || (length(n) != 3) || (length(weights) != 3)){
+    stop("The sum of the weights must equal 1 and the length of n and weights must be 3")
+  } else{
+    roc1 <- ROC(x, n = n[1], type = "discrete")
+    roc2 <- ROC(x, n = n[2], type = "discrete")
+    roc3 <- ROC(x, n = n[3], type = "discrete")
+    wave <- (roc1 * weights[1] + roc2 * weights[2] + roc3 * weights[3]) / sum(weights)
+    return(wave)
+  }
+}
+
+The function is pretty self explanatory, but feel free to ask if you have any questions.
+
+Now to the test results. The graph below shows the results from using 6, 9, and 12 month returns as well as an average of 6, 9, and 12 month returns and weighted average of 6, 9, and 12 month returns.
+
+Case 1: simple momentum test based on 6 month ROC to rank
+Case 2: simple momentum test based on 9 month ROC to rank
+Case 3: simple momentum test based on 12 month ROC to rank
+Case 4: simple momentum test based on average of 6, 9, and 12 month ROC to rank
+Case 5: simple momentum test based on weighted average of 6, 9, and 12 month ROC to rank. Weights are 1/6, 2/3, 1/6 for 6, 9, and 12 month returns.
+
+Here is a table of the returns and maximum drawdowns for the test.
+
+4 Assets
+        6-Month    9-Month    12-Month     Ave      Weighted Ave
+ CAGR   0.07576607 0.08270242 0.07040551 0.08278835  0.08466842
+ Max DD 0.4219671  0.4045444  0.4304139  0.4211499   0.3930215
+This test demonstrates how it may be possible to achieve better risk adjusted returns (higher CAGR and lower drawdowns in this case) by considering multiple lookback periods in the ranking method.
+
+Full R code is below. I have included all the functions in the R script below to make it easy for you to reproduce the tests and try things out, but I would recommend putting the functions in a separate file and using source() to load the functions to keep the code cleaner.
+```{r}
+# rank_test2.R
+
+# script to run a simple backtest comparing different ranking methods
+# for a momentum based trading system
+
+# remove objects from workspace
+rm(list = ls())
+
+# load required packages
+library(FinancialInstrument)
+library(TTR)
+library(PerformanceAnalytics)
+
+MonthlyAd <- function(x){
+  # Converts daily data to monthly and returns only the monthly close 
+  # Note: only used with Yahoo Finance data so far
+  # Thanks to Joshua Ulrich for the Monthly Ad function
+  # 
+  # args:
+  #   x = daily price data from Yahoo Finance
+  #
+  # Returns:
+  #   xts object with the monthly adjusted close prices
+
+  sym <- sub("\\..*$", "", names(x)[1])
+  Ad(to.monthly(x, indexAt = 'lastof', drop.time = TRUE, name = sym))
+}
+
+CAGR <- function(x, m){
+  # Function to compute the CAGR given simple returns
+  #
+  # args:
+  #  x = xts of simple returns
+  #  m = periods per year (i.e. monthly = 12, daily = 252)
+  #
+  # Returns the Compound Annual Growth Rate
+  x <- na.omit(x)
+  cagr <- apply(x, 2, function(x, m) prod(1 + x)^(1 / (length(x) / m)) - 1, m = m)
+  return(cagr)
+}
+
+RankRB <- function(x){
+  # Computes the rank of an xts object of ranking factors
+  # ranking factors are the factors that are ranked (i.e. asset returns)
+  #
+  # args:
+  #   x = xts object of ranking factors
+  #
+  # Returns:
+  #   Returns an xts object with ranks
+  #   (e.g. for ranking asset returns, the asset with the greatest return
+  #    receives a  rank of 1)
+
+  r <- as.xts(t(apply(-x, 1, rank, na.last = "keep")))
+  return(r)
+}
+
+SimpleMomentumTest <- function(xts.ret, xts.rank, n = 1, ret.fill.na = 3){
+  # returns a list containing a matrix of individual asset returns
+  # and the comnbined returns
+  # args:
+  #  xts.ret = xts of one period returns
+  #  xts.rank = xts of ranks
+  #  n = number of top ranked assets to trade
+  #  ret.fill.na = number of return periods to fill with NA
+  #
+  # Returns:
+  #  returns an xts object of simple returns
+
+  # trade the top n asset(s)
+  # if the rank of last period is less than or equal to n,
+  # then I would experience the return for this month.
+
+  # lag the rank object by one period to avoid look ahead bias
+  lag.rank <- lag(xts.rank, k = 1, na.pad = TRUE)
+  n2 <- nrow(lag.rank[is.na(lag.rank[,1]) == TRUE])
+  z <- max(n2, ret.fill.na)
+
+  # for trading the top ranked asset, replace all ranks above n
+  # with NA to set up for element wise multiplication to get
+  # the realized returns
+  lag.rank <- as.matrix(lag.rank)
+  lag.rank[lag.rank > n] <- NA
+  # set the element to 1 for assets ranked <= to rank
+  lag.rank[lag.rank <= n] <- 1
+
+  # element wise multiplication of the
+  # 1 period return matrix and lagged rank matrix
+  mat.ret <- as.matrix(xts.ret) * lag.rank
+
+  # average the rows of the mat.ret to get the
+  # return for that period
+  vec.ret <- rowMeans(mat.ret, na.rm = TRUE)
+  vec.ret[1:z] <- NA
+
+  # convert to an xts object
+  vec.ret <- xts(x = vec.ret, order.by = index(xts.ret))
+  f <- list(mat = mat.ret, ret = vec.ret, rank = lag.rank)
+  return(f)
+}
+
+WeightAve3ROC <- function(x, n = c(1,3,6), weights = c(1/3, 1/3, 1/3)){
+  # Computes the weighted average rate of change based on a vector of periods
+  # and a vector of weights
+  #
+  # args:
+  #   x = xts object of simple returns
+  #   n = vector of periods to use n = (period1, period2, period3)
+  #   weights = a vector of weights for computing the weighted average
+  #
+  # Returns:
+  #   xts object of weighted average asset rate of change
+  if((sum(weights) != 1) || (length(n) != 3) || (length(weights) != 3)){
+    stop("The sum of the weights must equal 1 and the length of n and weights must be 3")
+  } else{
+    roc1 <- ROC(x, n = n[1], type = "discrete")
+    roc2 <- ROC(x, n = n[2], type = "discrete")
+    roc3 <- ROC(x, n = n[3], type = "discrete")
+    wave <- (roc1 * weights[1] + roc2 * weights[2] + roc3 * weights[3]) / sum(weights)
+    return(wave)
+  }
+}
+
+currency("USD")
+symbols <- c("XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLK", "XLB", "XLU", "EFA")
+stock(symbols, currency = "USD", multiplier = 1)
+
+# create new environment to store symbols
+symEnv <- new.env()
+
+# getSymbols and assign the symbols to the symEnv environment
+getSymbols(symbols, from = '2002-09-01', to = '2012-10-20', env = symEnv)
+
+# xts object of the monthly adjusted close prices
+symbols.close <- do.call(merge, eapply(symEnv, MonthlyAd))
+
+# monthly returns
+monthly.returns <- ROC(x = symbols.close, n = 1, type = "discrete", na.pad = TRUE)
+
+#############################################################################
+# rate of change and rank based on a single period for 6, 9, and 12 months
+#############################################################################
+
+roc.six <- ROC(x = symbols.close , n = 6, type = "discrete")
+rank.six <- RankRB(roc.six)
+
+roc.nine <- ROC(x = symbols.close , n = 9, type = "discrete")
+rank.nine <- RankRB(roc.nine)
+
+roc.twelve <- ROC(x = symbols.close , n = 12, type = "discrete")
+rank.twelve <- RankRB(roc.twelve)
+
+#############################################################################
+# rate of change and rank based on averaging 6, 9, and 12 month returns
+#############################################################################
+roc.ave <- WeightAve3ROC(x = symbols.close, n = c(6, 9, 12), 
+                         weights = c(1/3, 1/3, 1/3))
+rank.ave <- RankRB(roc.ave)
+
+roc.weight.ave <- WeightAve3ROC(x = symbols.close, n = c(6, 9, 12), 
+                                weights = c(1/6, 2/3, 1/6))
+rank.weight.ave <- RankRB(roc.weight.ave)
+
+#############################################################################
+# run the backtest
+#############################################################################
+
+num.assets <- 4
+
+# simple momentum test based on 6 month ROC to rank
+case1 <- SimpleMomentumTest(xts.ret = monthly.returns, xts.rank = rank.six,
+                            n = num.assets, ret.fill.na = 15)
+
+# simple momentum test based on 9 month ROC to rank
+case2 <- SimpleMomentumTest(xts.ret = monthly.returns, xts.rank = rank.nine,
+                            n = num.assets, ret.fill.na = 15)
+
+# simple momentum test based on 12 month ROC to rank
+case3 <- SimpleMomentumTest(xts.ret = monthly.returns, xts.rank = rank.twelve,
+                            n = num.assets, ret.fill.na = 15)
+
+# simple momentum test based on average of 6, 9, and 12 month ROC to rank
+case4 <- SimpleMomentumTest(xts.ret = monthly.returns, xts.rank = rank.ave,
+                            n = num.assets, ret.fill.na = 15)
+
+# simple momentum test based on weighted average of 6, 9, and 12 month ROC to rank
+case5 <- SimpleMomentumTest(xts.ret = monthly.returns, xts.rank = rank.weight.ave,
+                            n = num.assets, ret.fill.na = 15)
+
+returns <- cbind(case1$ret, case2$ret, case3$ret, case4$ret, case5$ret)
+colnames(returns) <- c("6-Month", "9-Month", "12-Month", "Ave", "Weighted Ave")
+
+charts.PerformanceSummary(R = returns, Rf = 0, geometric = TRUE, 
+                          main = "Momentum Cumulative Return: Top 4 Assets")
+
+table.Stats(returns)
+
+cagr <- CAGR(returns, m = 12)
+max.dd <- maxDrawdown(returns)
+print(cagr)
+print(max.dd)
+
+print("End")
+
+```

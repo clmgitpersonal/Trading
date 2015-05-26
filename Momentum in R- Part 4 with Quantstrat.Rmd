@@ -1,0 +1,204 @@
+---
+title: "Momentum i R: Part 4 with Quantstrat"
+author: "rbresearch"
+date: "February 19, 2013"
+output: html_document
+---
+The past few posts on momentum with R focused on a relatively simple way to backtest momentum strategies. In part 4, I use the quantstrat framework to backtest a momentum strategy. Using quantstrat opens the door to several features and options as well as an order book to check the trades at the completion of the backtest.
+
+I introduce a few new functions that are used to prep the data and compute the ranks. I won’t go through them in detail, these functions are available in my github repo in the rank-functions folder.
+
+This first chunk of code just loads the necessary libraries, data, and applies the ave3ROC function to rank the assets based on averaging the 2, 4, and 6 month returns. Note that you will need to load the functions in Rank.R and monthly-fun.R.
+```{r}
+# remove objects from workspace
+rm(list = ls())
+library(quantstrat)
+library(PerformanceAnalytics)
+
+# Rank.R contains functions for different ranking algorithms
+source("Rank.R")
+
+# monthly-fun.R contains functions for prepping monthly data
+source("monthly-fun.R")
+
+# qstratRank.R contains the function to run the Rank backtest using the
+# quantstrat framework
+source("qstratRank.R")
+
+currency("USD")
+symbols <- c("XLY", "XLP", "XLE", "AGG", "IVV")
+stock(symbols, currency="USD")
+
+# get data for the symbols
+getSymbols(symbols, from="2005-01-01", to="2012-12-31")
+
+# create an xts object of monthly adjusted close prices
+symbols.close <- monthlyPrices(symbols)
+
+# create an xts object of the symbol ranks
+sym.rank <- applyRank(x=symbols.close, rankFun=ave3ROC, n=c(2, 4, 6))
+```
+The next chunk of code is a critical step in preparing the data to be used in quantstrat. With the ranks computed, the next step is to bind the ranks to the actual market data to be used with quantstrat. It is also important to change the column names to e.g. XLY.Rank because that will be used as the trade signal column when quantstrat is used.
+```{r}
+# this is an important step in naming the columns, e.g. XLY.Rank
+# the "Rank" column is used as the trade signal (similar to an indicator)
+# in the qstratRank function
+colnames(sym.rank) <- gsub(".Adjusted", ".Rank", colnames(sym.rank))
+
+# ensure the order of order symbols is equal to the order of columns 
+# in symbols.close
+stopifnot(all.equal(gsub(".Adjusted", "", colnames(symbols.close)), symbols))
+
+# bind the rank column to the appropriate symbol market data
+# loop through symbols, convert the data to monthly and cbind the data
+# to the rank
+for(i in 1:length(symbols)) {
+  x <- get(symbols[i])
+  x <- to.monthly(x,indexAt='lastof',drop.time=TRUE)
+  indexFormat(x) <- '%Y-%m-%d'
+  colnames(x) <- gsub("x",symbols[i],colnames(x))
+  x <- cbind(x, sym.rank[,i])
+  assign(symbols[i],x)
+}
+```
+
+
+Now the backtest can be run. The function qstratRank is just a convenience function that hides the quantstrat implementation for my Rank strategy.
+
+For this first backtest, I am trading the top 2 assets with a position size of 1000 units.
+```{r}
+# run the backtest
+bt <- qstratRank(symbols=symbols, init.equity=100000, top.N=2,
+                  max.size=1000, max.levels=1)
+
+# chart of returns
+charts.PerformanceSummary(bt$returns[,"total"], geometric=FALSE, 
+                          wealth.index=TRUE, main="Total Performance")
+```
+
+Changing the argument to max.levels=2 gives the flexibility of “scaling” in a trade. In this example, say asset ABC is ranked 1 in the first month — I buy 500 units. In month 2, asset ABC is still ranked 1 — I buy another 500 units.
+```{r}
+# run the backtest
+bt <- qstratRank(symbols=symbols, init.equity=100000, top.N=2,
+                  max.size=1000, max.levels=2)
+
+# chart of returns
+charts.PerformanceSummary(bt$returns[,"total"], geometric=FALSE, 
+                          wealth.index=TRUE, main="Total Performance")
+```
+
+Full code available here: https://github.com/rbresearch/Ranking/blob/master/quantstrat-rank-backtest.R
+
+The backtest in Part 3 of this series of posts is simplified and just uses the 1 period simple returns on the overall return calculation. Using quantstrat, the returns are based on actual transactions (e.g. buy 1000 shares of IVV at 141.88). This is the reason why the backtest statistics are different.
+
+For some more details let us look at XLE:
+tail(XLE,8)
+XLE.Open XLE.High XLE.Low XLE.Close XLE.Volume XLE.Adjusted XLE.Rank
+2012-07-31 66.37 70.68 64.64 69.65 291007200 68.99 4
+2012-08-31 69.91 73.03 68.16 71.53 212709700 70.85 5
+2012-09-30 71.46 77.35 70.40 73.43 206863800 73.06 1
+2012-10-31 73.94 75.19 71.02 71.94 236902800 71.58 1
+2012-11-30 71.66 73.06 67.77 71.06 234855900 70.70 2
+2012-12-31 71.60 73.39 69.57 71.42 198245000 71.42 3
+
+We would expect a signal to be generated on 2012-09-30 to buy XLE at 73.43.
+
+tail(getOrderBook("Rank")$Rank$XLE,8)[,1:2]
+Order.Qty Order.Price
+2012-05-30 19:00:08 "all" "63.63"
+2012-06-29 19:00:08 "all" "66.37"
+2012-07-30 19:00:08 "all" "69.65"
+2012-08-30 19:00:08 "all" "71.53"
+2012-09-29 19:00:08 "1000" "73.43"
+2012-12-30 18:00:08 "all" "71.42"
+
+That makes sense and we see an order for 1000 shares at 73.43. That doesn’t mean the trade was executed at that price. What was it actually executed at? You can look at what is printed from applyStrategy or get the transactions with getTxns.
+tail(getTxns("Rank", "XLE"),10)[,1:2]
+Txn.Qty Txn.Price
+2009-11-29 18:00:08 -1000 57.01
+2010-10-30 19:00:08 1000 62.71
+2011-06-29 19:00:08 -1000 76.45
+2011-11-29 18:00:08 1000 69.13
+2011-12-30 18:00:08 -1000 70.69
+2012-09-29 19:00:08 1000 71.94
+
+We can see here that the trade is actually executed at 71.94, the closing price of next month. So there is a lag of one month before the trade is executed.
+
+```{r}
+# quantstrat-rank-backtest.R
+
+rm(list=ls())
+
+library(quantstrat)
+library(PerformanceAnalytics)
+
+# Rank.R contains functions for different ranking algorithms
+source("Rank.R")
+
+# monthly-fun.R contains functions for prepping monthly data
+source("monthly-fun.R")
+
+# qstratRank.R contains the function to run the Rank backtest using the
+# quantstrat framework
+source("qstratRank.R")
+ttz<-Sys.getenv('TZ')
+Sys.setenv(TZ='UTC')
+currency("USD")
+symbols <- c("XLY", "XLP", "XLE", "AGG", "IVV")
+stock(symbols, currency="USD")
+
+# get data for the symbols
+getSymbols(symbols, from="2005-01-01", to="2012-12-31")
+
+# create an xts object of monthly adjusted close prices
+symbols.close <- monthlyPrices(symbols)
+
+# create an xts object of the symbol ranks
+sym.rank <- applyRank(x=symbols.close, rankFun=ave3ROC, n=c(2, 4, 6))
+
+# this is an important step in naming the columns, e.g. XLY.Rank
+# the "Rank" column is used as the trade signal (similar to an indicator)
+# in the qstratRank function
+colnames(sym.rank) <- gsub(".Adjusted", ".Rank", colnames(sym.rank))
+
+# ensure the order of order symbols is equal to the order of columns 
+# in symbols.close
+stopifnot(all.equal(gsub(".Adjusted", "", colnames(symbols.close)), symbols))
+
+# bind the rank column to the appropriate symbol market data
+# loop through symbols, convert the data to monthly and cbind the data
+# to the rank
+for(i in 1:length(symbols)) {
+  x <- get(symbols[i])
+  x <- to.monthly(x,indexAt='lastof',drop.time=TRUE)
+  indexFormat(x) <- '%Y-%m-%d'
+  colnames(x) <- gsub("x",symbols[i],colnames(x))
+ # x <- cbind(x, sym.rank[,i])
+ # Don't use previous, use the following:
+   x <- merge(x, sym.rank[,i])
+  assign(symbols[i],x)
+}
+
+# run the backtest
+bt <- qstratRank(symbols=symbols, init.equity=100000, top.N=2,
+                  max.size=1000, max.levels=1)
+
+# get trade stats
+bt.stats <- bt$stats
+
+# chart of returns
+charts.PerformanceSummary(bt$returns[,"total"], geometric=FALSE, 
+                          wealth.index=TRUE, main="Total Performance")
+
+
+###############################################################################
+# R (http://r-project.org/) Quantitative Strategy Model Framework
+#
+# Copyright (c) 2009-2012
+# Peter Carl, Dirk Eddelbuettel, Brian G. Peterson, Jeffrey Ryan, and Joshua Ulrich 
+#
+# This library is distributed under the terms of the GNU Public License (GPL)
+# for full details see the file COPYING
+#
+###############################################################################
+```
