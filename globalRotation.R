@@ -3,8 +3,9 @@ require(PerformanceAnalytics)
 # take five markets (e.g. the global markets MDY, ILF, FEZ, EEM, and EPP), 
 # along with a treasury ETF (TLT), and every month, fully invest
 # in the security that had the best momentum.
-globalrotation <- c("MDY",          #Mid Cap 400
-                    "TLT", "EEM",
+globalrotation <- c("MDY",          # Mid Cap 400
+                    "TLT",          # 20 yr US Treas
+                    "EEM",
                     "ILF",          #Latin America
                     "EPP",          #MSCI Pacific ex Japan
                     "FEZ"           #DJ Euro Stoxx 50
@@ -19,15 +20,17 @@ usnewsbestmutualfunds <- c("SPY",
                            )
 coffeehouse <- c("VFINX","VIVAX","NAESX","VISVX","VGSIX","VGTSX","VBMFX","SHY")
 wellmuni <- c("VWELX","VWINX","MUB")
-permanentrotation <- c("GLD","TLT","SHY","SPX")
+permanentrotation <- c("GLD","TLT","SHY","SPY")
+pictet <- c("SPY","GLD","EEM","IEF")
 symbols <- usnewsbestmutualfunds
 
 symbols <- coffeehouse
 symbols <- wellmuni
 symbols <- permanentrotation
 symbols <- globalrotation
+symbols <- pictet
 
-getSymbols(symbols, from="1990-01-01")
+getSymbols(symbols, from="2000-01-01")
 prices <- list()
 for(i in 1:length(symbols)) {
   prices[[i]] <- Ad(get(symbols[i]))
